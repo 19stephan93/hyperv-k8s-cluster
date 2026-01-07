@@ -1,6 +1,6 @@
 variable "switch_name" {
   type    = string
-  default = "Default Switch"
+  default = "Bridge"
 }
 
 variable "memory_mb" {

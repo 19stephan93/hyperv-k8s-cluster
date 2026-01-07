@@ -10,11 +10,11 @@ terraform {
 provider "hyperv" {
   host = "localhost"
   # 5986 for https and 5985 for http WinRM connection
-  port = 5986
-  # port = 5985
+  # port = 5986
+  port = 5985
   # enable this to run over http
-  # https = false
-  # insecure = true
+  https = false
+  insecure = true
   user     = "your_windows_user"
   password = "your_windows_password"
 }
@@ -24,14 +24,18 @@ locals {
     {
       name = "master-node"
       # Change to the outputed packer image
-      vhdx_path = "E:\\hyper-v-automation\\packer\\output-ubuntu\\Virtual Hard Disks\\ubuntu-packer-master.vhdx"
-      # mac_address = ""
+      vhdx_path = "E:\\projects\\technovateit-solutions\\hyperv-k8s-cluster\\packer\\output-ubuntu\\Virtual Hard Disks\\ubuntu-packer-master.vhdx"
+      mac_address = "00:15:5D:01:80:40",
+      memory_mb = 4096,
+      cpu_count = 2
     },
     {
       name = "worker-node"
       # Change to the outputed packer image
-      vhdx_path = "E:\\hyper-v-automation\\packer\\output-ubuntu\\Virtual Hard Disks\\ubuntu-packer-worker.vhdx"
-      # mac_address = ""
+      vhdx_path = "E:\\projects\\technovateit-solutions\\hyperv-k8s-cluster\\packer\\output-ubuntu\\Virtual Hard Disks\\ubuntu-packer-worker.vhdx"
+      mac_address = "00:15:5D:01:80:41",
+      memory_mb = 8192,
+      cpu_count = 4
     }
   ]
 }
@@ -42,8 +46,8 @@ resource "hyperv_machine_instance" "node" {
   name       = each.value.name
   generation = 2
   # change in variables.tf
-  memory_startup_bytes = var.memory_mb * 1024 * 1024
-  processor_count      = var.cpu_count
+  memory_startup_bytes = each.value.memory_mb * 1024 * 1024
+  processor_count      = each.value.cpu_count
 
   static_memory = true
 
@@ -82,8 +86,8 @@ resource "hyperv_machine_instance" "node" {
     switch_name = var.switch_name
 
     ## to set static mac address
-    # dynamic_mac_address = false
-    # static_mac_address  = each.value.mac_address
+    dynamic_mac_address = false
+    static_mac_address  = each.value.mac_address
   }
 
   hard_disk_drives {

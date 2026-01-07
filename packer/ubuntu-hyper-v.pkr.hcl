@@ -14,8 +14,8 @@ variable "iso_path" {
 
 source "hyperv-iso" "ubuntu" {
   iso_url             = var.iso_path
-  iso_checksum        = "sha256:<your_sha256>"
-  # iso_checksum        = "none" # to disable checksum
+  # iso_checksum        = "sha256:<your_sha256>"
+  iso_checksum        = "none" # to disable checksum
 
   communicator        = "ssh"
   ssh_username        = "ubuntu"
@@ -26,7 +26,7 @@ source "hyperv-iso" "ubuntu" {
 
   vm_name             = "ubuntu-packer"
   generation          = 2
-  switch_name         = "Default Switch"
+  switch_name         = "Bridge"
   cpus                = 4 # 4 cores
   memory              = 4096 # 4gb
 

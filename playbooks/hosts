@@ -1,5 +1,5 @@
 [masters]
-master-node ansible_host=<master-node_ip> ansible_user=ubuntu
+master-node ansible_host=192.168.1.132 ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/id_rsa
 
 [workers]
-worker-node ansible_host=<worker-node_ip> ansible_user=ubuntu
+worker-node ansible_host=192.168.1.140 ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/id_rsa

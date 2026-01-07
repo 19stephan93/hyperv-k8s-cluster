@@ -135,9 +135,9 @@ ansible -i hosts all -m ping
 ### 14. Run Ansible Playbooks
 
 ```bash
-ansible-playbook -i hosts kubernetes_setup_playbook.yaml
-ansible-playbook -i hosts master_setup_playbook.yaml
-ansible-playbook -i hosts worker_setup_playbook.yaml
+ansible-playbook -i hosts kubernetes_setup_playbook.yml
+ansible-playbook -i hosts master_setup_playbook.yml
+ansible-playbook -i hosts worker_setup_playbook.yml
 ```
 
 ---
