@@ -15,27 +15,27 @@ provider "hyperv" {
   # enable this to run over http
   https = false
   insecure = true
-  user     = "your_windows_user"
-  password = "your_windows_password"
+  user     = "19stephan93@gmail.com"
+  password = "Wu9CiF7P5q+z3*J#"
 }
 
 locals {
   nodes = [
     {
-      name = "master-node"
+      name = "k8s-cp-001"
       # Change to the outputed packer image
-      vhdx_path = "E:\\projects\\technovateit-solutions\\hyperv-k8s-cluster\\packer\\output-ubuntu\\Virtual Hard Disks\\ubuntu-packer-master.vhdx"
-      mac_address = "00:15:5D:01:80:40",
-      memory_mb = 4096,
-      cpu_count = 2
+      vhdx_path = "E:\\projects\\technovateit-solutions\\hyperv-k8s-cluster\\hdds\\ubuntu-packer-k8s-cp-1.vhdx"
+      mac_address = "00:15:5D:01:80:70",
+      memory_mb = 6144,
+      cpu_count = 4
     },
     {
-      name = "worker-node"
+      name = "k8s-worker-001"
       # Change to the outputed packer image
-      vhdx_path = "E:\\projects\\technovateit-solutions\\hyperv-k8s-cluster\\packer\\output-ubuntu\\Virtual Hard Disks\\ubuntu-packer-worker.vhdx"
-      mac_address = "00:15:5D:01:80:41",
-      memory_mb = 8192,
-      cpu_count = 4
+      vhdx_path = "E:\\projects\\technovateit-solutions\\hyperv-k8s-cluster\\hdds\\ubuntu-packer-k8s-worker-1.vhdx"
+      mac_address = "00:15:5D:01:80:81",
+      memory_mb = 12288,
+      cpu_count = 6
     }
   ]
 }
@@ -95,13 +95,22 @@ resource "hyperv_machine_instance" "node" {
     controller_number   = "0"
     path                = each.value.vhdx_path
   }
+
+  lifecycle {
+    ignore_changes = [
+      # Ignore changes to the VHDX path to prevent recreation when disk is modified
+      hard_disk_drives[0].path,
+      # Ignore MAC address format changes to prevent VM restarts
+      network_adaptors[0].static_mac_address,
+    ]
+  }
 }
 
 data "external" "node_ip" {
   depends_on = [hyperv_machine_instance.node]
   for_each   = { for node in local.nodes : node.name => node }
 
-  program = ["powershell", "./script/get_node_ip.ps1", "-NodeName", each.key, "-SwitchName", "\"${var.switch_name}\""]
+  program = ["powershell", "-File", "../scripts/get_node_ip.ps1", "-NodeName", each.key, "-SwitchName", var.switch_name]
 }
 
 # change hostname and set static ip
@@ -117,7 +126,7 @@ resource "null_resource" "modify_node" {
   }
 
   provisioner "file" {
-    source      = "${path.module}/script/modify_node.sh"
+    source      = "${path.module}/../scripts/modify_node.sh"
     destination = "/tmp/modify_node.sh"
   }
 

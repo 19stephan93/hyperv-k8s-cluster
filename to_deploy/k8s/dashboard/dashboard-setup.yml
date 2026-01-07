@@ -1,0 +1,13 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kubernetes-dashboard
+
+---
+# This will install the Kubernetes Dashboard
+# Apply the official dashboard manifest:
+# kubectl apply -f https://raw.githubusercontent.com/kubernetes/dashboard/v2.7.0/aio/deploy/recommended.yaml
+# Or use the alternative v3 version:
+# kubectl apply -f https://raw.githubusercontent.com/kubernetes/dashboard/v3.0.0/charts/kubernetes-dashboard.yaml
+

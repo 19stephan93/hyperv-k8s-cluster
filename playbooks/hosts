@@ -1,5 +1,40 @@
-[masters]
-master-node ansible_host=192.168.1.132 ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/id_rsa
+# Kubernetes Cluster
+[k8s_masters]
+k8s-cp-001 ansible_host=192.168.1.138 ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/id_rsa
 
-[workers]
-worker-node ansible_host=192.168.1.140 ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/id_rsa
+[k8s_workers]
+k8s-worker-001 ansible_host=192.168.1.140 ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/id_rsa
+
+# Kubernetes group (combines masters and workers)
+[k8s_all:children]
+k8s_masters
+k8s_workers
+
+# HashiCorp Stack
+[consul_servers]
+hashicorp-server-001 ansible_host=192.168.1.150 ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/id_rsa
+
+[consul_clients]
+hashicorp-client-001 ansible_host=192.168.1.161 ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/id_rsa
+
+[vault_servers]
+hashicorp-server-001 ansible_host=192.168.1.150 ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/id_rsa
+
+[nomad_servers]
+hashicorp-server-001 ansible_host=192.168.1.150 ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/id_rsa
+
+[nomad_clients]
+hashicorp-client-001 ansible_host=192.168.1.161 ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/id_rsa
+
+[hashicorp_servers:children]
+consul_servers
+vault_servers
+nomad_servers
+
+[hashicorp_clients:children]
+consul_clients
+nomad_clients
+
+[hashicorp_all:children]
+hashicorp_servers
+hashicorp_clients

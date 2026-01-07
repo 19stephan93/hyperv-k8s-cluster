@@ -1,0 +1,314 @@
+---
+- hosts: k8s_masters
+  become_user: ubuntu
+  tasks:
+  - name: Wait for cluster to be ready
+    shell: kubectl get nodes
+    register: nodes_status
+    until: nodes_status.rc == 0
+    retries: 10
+    delay: 10
+
+  - name: Create temporary directory for K8s manifests
+    file:
+      path: /tmp/k8s-manifests
+      state: directory
+      mode: '0755'
+
+  - name: Copy MetalLB configuration
+    copy:
+      src: "{{ playbook_dir }}/../../to_deploy/k8s/metallb/"
+      dest: /tmp/k8s-manifests/metallb/
+      mode: '0644'
+
+  - name: Copy Envoy Gateway configuration
+    copy:
+      src: "{{ playbook_dir }}/../../to_deploy/k8s/envoy-gateway/"
+      dest: /tmp/k8s-manifests/envoy-gateway/
+      mode: '0644'
+
+  - name: Copy Dashboard configuration
+    copy:
+      src: "{{ playbook_dir }}/../../to_deploy/k8s/dashboard/"
+      dest: /tmp/k8s-manifests/dashboard/
+      mode: '0644'
+
+  - name: Copy Whoami example
+    copy:
+      src: "{{ playbook_dir }}/../../to_deploy/k8s/whoami/"
+      dest: /tmp/k8s-manifests/whoami/
+      mode: '0644'
+
+  - name: Create marker directory
+    file:
+      path: /home/ubuntu/.k8s-deployed
+      state: directory
+      mode: '0755'
+
+  - name: Check if MetalLB is already installed
+    stat:
+      path: /home/ubuntu/.k8s-deployed/metallb-installed
+    register: metallb_installed
+
+  - name: Install MetalLB using manifest
+    shell: kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.14.9/config/manifests/metallb-native.yaml
+    when: not metallb_installed.stat.exists
+
+  - name: Wait for MetalLB namespace to be created
+    shell: kubectl get namespace metallb-system
+    register: metallb_ns
+    until: metallb_ns.rc == 0
+    retries: 10
+    delay: 3
+    when: not metallb_installed.stat.exists
+
+  - name: Check if memberlist secret exists
+    shell: kubectl get secret memberlist -n metallb-system
+    register: memberlist_check
+    ignore_errors: yes
+    changed_when: false
+    failed_when: false
+
+  - name: Create memberlist secret if missing
+    shell: kubectl create secret generic -n metallb-system memberlist --from-literal=secretkey="$(openssl rand -base64 128)"
+    when: memberlist_check.rc != 0
+
+  - name: Wait for MetalLB controller deployment to be created
+    shell: kubectl get deployment controller -n metallb-system
+    register: metallb_deployment
+    until: metallb_deployment.rc == 0
+    retries: 20
+    delay: 3
+    ignore_errors: yes
+
+  - name: Check if controller has control-plane toleration
+    shell: kubectl get deployment controller -n metallb-system -o jsonpath='{.spec.template.spec.tolerations[?(@.key=="node-role.kubernetes.io/control-plane")].key}'
+    register: controller_toleration
+    changed_when: false
+    ignore_errors: yes
+
+  - name: Patch controller deployment to tolerate control-plane taint (strategic merge)
+    shell: |
+      kubectl patch deployment controller -n metallb-system --type=strategic --patch='
+      spec:
+        template:
+          spec:
+            tolerations:
+            - key: node-role.kubernetes.io/control-plane
+              operator: Exists
+              effect: NoSchedule
+      '
+    when: controller_toleration.stdout == ""
+    ignore_errors: yes
+
+  - name: Wait for controller pod to be recreated after patch
+    shell: sleep 5
+    when: controller_toleration.stdout == ""
+
+  - name: Wait for MetalLB speaker daemonset to be created
+    shell: kubectl get daemonset speaker -n metallb-system
+    register: metallb_daemonset
+    until: metallb_daemonset.rc == 0
+    retries: 20
+    delay: 3
+    ignore_errors: yes
+
+  - name: Wait for MetalLB pods to be running
+    shell: kubectl get pods -n metallb-system --no-headers 2>/dev/null | grep -v Running | wc -l
+    register: metallb_pods
+    until: metallb_pods.stdout == "0"
+    retries: 40
+    delay: 10
+    ignore_errors: yes
+
+  - name: Wait for MetalLB webhook service to be ready
+    shell: kubectl get endpoints metallb-webhook-service -n metallb-system -o jsonpath='{.subsets[0].addresses[0].ip}' 2>/dev/null
+    register: webhook_endpoint
+    until: webhook_endpoint.stdout != ""
+    retries: 30
+    delay: 10
+    ignore_errors: yes
+
+  - name: Wait additional time for webhook to fully initialize
+    shell: sleep 15
+    when: webhook_endpoint.stdout != ""
+
+  - name: Check if MetalLB IPAddressPool exists
+    shell: kubectl get ipaddresspool -n metallb-system default-pool 2>/dev/null
+    register: ippool_check
+    ignore_errors: yes
+    changed_when: false
+    failed_when: false
+
+  - name: Apply MetalLB configuration
+    shell: kubectl apply -f /tmp/k8s-manifests/metallb/metallb-config.yml
+    when: ippool_check.rc != 0
+    retries: 3
+    delay: 10
+    register: metallb_config_result
+    until: metallb_config_result.rc == 0
+
+  - name: Mark MetalLB as installed
+    file:
+      path: /home/ubuntu/.k8s-deployed/metallb-installed
+      state: touch
+
+  - name: Check if Envoy Gateway is already installed
+    stat:
+      path: /home/ubuntu/.k8s-deployed/envoy-gateway-installed
+    register: envoy_installed
+
+  - name: Install Envoy Gateway
+    shell: kubectl apply -f https://github.com/envoyproxy/gateway/releases/download/v1.0.0/install.yaml
+    when: not envoy_installed.stat.exists
+
+  - name: Wait for Envoy Gateway namespace to be ready
+    shell: kubectl get namespace envoy-gateway-system
+    register: eg_namespace
+    until: eg_namespace.rc == 0
+    retries: 10
+    delay: 5
+
+  - name: Wait for Envoy Gateway deployments to be created
+    shell: kubectl get deployment -n envoy-gateway-system --no-headers 2>/dev/null | wc -l
+    register: eg_deployments
+    until: eg_deployments.stdout | int > 0
+    retries: 20
+    delay: 5
+
+  - name: Wait for Envoy Gateway to be ready
+    shell: kubectl wait --namespace envoy-gateway-system --for=condition=available deployment --all --timeout=300s
+    register: envoy_ready
+    retries: 2
+    delay: 10
+    until: envoy_ready.rc == 0
+    ignore_errors: yes
+
+  - name: Check if Gateway already exists
+    shell: kubectl get gateway eg -n envoy-gateway-system
+    register: gateway_check
+    ignore_errors: yes
+    changed_when: false
+    failed_when: false
+
+  - name: Apply Envoy Gateway configuration
+    shell: kubectl apply -f /tmp/k8s-manifests/envoy-gateway/gateway.yml
+    when: gateway_check.rc != 0
+
+  - name: Mark Envoy Gateway as installed
+    file:
+      path: /home/ubuntu/.k8s-deployed/envoy-gateway-installed
+      state: touch
+
+  - name: Wait for Gateway to get LoadBalancer IP
+    shell: kubectl get gateway eg -n envoy-gateway-system -o jsonpath='{.status.addresses[0].value}' 2>/dev/null
+    register: gateway_ip
+    until: gateway_ip.stdout != ""
+    retries: 30
+    delay: 10
+    ignore_errors: yes
+
+  - name: Display Gateway IP
+    debug:
+      msg: "Envoy Gateway LoadBalancer IP: {{ gateway_ip.stdout | default('Pending - will be assigned after worker node joins') }}"
+
+  - name: Check if Dashboard is already installed
+    stat:
+      path: /home/ubuntu/.k8s-deployed/dashboard-installed
+    register: dashboard_installed
+
+  - name: Install Kubernetes Dashboard
+    shell: kubectl apply -f https://raw.githubusercontent.com/kubernetes/dashboard/v2.7.0/aio/deploy/recommended.yaml
+    when: not dashboard_installed.stat.exists
+
+  - name: Wait for Dashboard namespace
+    shell: kubectl get namespace kubernetes-dashboard
+    register: dashboard_ns
+    until: dashboard_ns.rc == 0
+    retries: 10
+    delay: 3
+    when: not dashboard_installed.stat.exists
+
+  - name: Check if dashboard admin user exists
+    shell: kubectl get serviceaccount admin-user -n kubernetes-dashboard
+    register: admin_user_check
+    ignore_errors: yes
+    changed_when: false
+    failed_when: false
+
+  - name: Apply Dashboard admin user
+    shell: kubectl apply -f /tmp/k8s-manifests/dashboard/dashboard-admin.yml
+    when: admin_user_check.rc != 0
+
+  - name: Check if dashboard HTTPRoute exists
+    shell: kubectl get httproute kubernetes-dashboard -n kubernetes-dashboard
+    register: dashboard_route_check
+    ignore_errors: yes
+    changed_when: false
+    failed_when: false
+
+  - name: Apply Dashboard ingress route
+    shell: kubectl apply -f /tmp/k8s-manifests/dashboard/dashboard-ingress.yml
+    when: dashboard_route_check.rc != 0
+    ignore_errors: yes
+
+  - name: Mark Dashboard as installed
+    file:
+      path: /home/ubuntu/.k8s-deployed/dashboard-installed
+      state: touch
+
+  - name: Check if Whoami is already deployed
+    stat:
+      path: /home/ubuntu/.k8s-deployed/whoami-deployed
+    register: whoami_deployed
+
+  - name: Deploy Whoami example application
+    shell: kubectl apply -f /tmp/k8s-manifests/whoami/whoami.yml
+    when: not whoami_deployed.stat.exists
+
+  - name: Mark Whoami as deployed
+    file:
+      path: /home/ubuntu/.k8s-deployed/whoami-deployed
+      state: touch
+
+  - name: Check if dashboard token file exists
+    stat:
+      path: /home/ubuntu/dashboard-token.txt
+    register: token_file
+
+  - name: Get Dashboard admin token
+    shell: kubectl -n kubernetes-dashboard create token admin-user --duration=87600h
+    register: dashboard_token
+    when: not token_file.stat.exists
+    ignore_errors: yes
+
+  - name: Save Dashboard token to file
+    copy:
+      content: "{{ dashboard_token.stdout }}"
+      dest: /home/ubuntu/dashboard-token.txt
+      mode: '0600'
+    when: not token_file.stat.exists and dashboard_token.stdout is defined
+
+  - name: Get current cluster status
+    shell: kubectl get nodes
+    register: cluster_nodes
+    changed_when: false
+
+  - name: Display deployment summary
+    debug:
+      msg:
+        - "============================================"
+        - "Kubernetes Cluster Deployment Status"
+        - "============================================"
+        - "Nodes:"
+        - "{{ cluster_nodes.stdout }}"
+        - ""
+        - "Components:"
+        - "✓ MetalLB: Installed with IP pool 192.168.1.200-250"
+        - "✓ Envoy Gateway: {{ gateway_ip.stdout | default('Pending LoadBalancer IP') }}"
+        - "✓ Dashboard: http://dashboard.k8s.local (via Gateway)"
+        - "✓ Whoami Test App: http://whoami.local (via Gateway)"
+        - ""
+        - "Dashboard admin token: /home/ubuntu/dashboard-token.txt"
+        - "To retrieve: ssh ubuntu@{{ ansible_host }} cat ~/dashboard-token.txt"
+        - "============================================"

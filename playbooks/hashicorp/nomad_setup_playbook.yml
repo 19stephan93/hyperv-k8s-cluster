@@ -1,0 +1,210 @@
+---
+# Nomad Setup Playbook
+# Run: ansible-playbook -i hosts nomad_setup_playbook.yml
+
+- hosts: nomad_servers
+  become: yes
+  vars:
+    nomad_datacenter: "dc1"
+    nomad_data_dir: "/opt/nomad/data"
+    nomad_encrypt_key: "{{ lookup('env', 'NOMAD_ENCRYPT_KEY') | default('cg8StVXbQJ0gPvMd9o7yrg==', true) }}"
+
+  tasks:
+    - name: Create Nomad server configuration
+      copy:
+        dest: /etc/nomad.d/nomad.hcl
+        owner: nomad
+        group: nomad
+        mode: '0640'
+        content: |
+          datacenter = "{{ nomad_datacenter }}"
+          data_dir   = "{{ nomad_data_dir }}"
+          bind_addr  = "0.0.0.0"
+          
+          advertise {
+            http = "{{ ansible_host }}"
+            rpc  = "{{ ansible_host }}"
+            serf = "{{ ansible_host }}"
+          }
+          
+          server {
+            enabled          = true
+            bootstrap_expect = {{ groups['nomad_servers'] | length }}
+            encrypt          = "{{ nomad_encrypt_key }}"
+            
+            server_join {
+              retry_join = [{% for host in groups['nomad_servers'] %}"{{ hostvars[host]['ansible_host'] }}"{% if not loop.last %}, {% endif %}{% endfor %}]
+            }
+          }
+          
+          client {
+            enabled = false
+          }
+          
+          consul {
+            address = "127.0.0.1:8500"
+          }
+          
+          vault {
+            enabled = true
+            address = "http://{{ hostvars[groups['vault_servers'][0]]['ansible_host'] }}:8200"
+          }
+          
+          ui {
+            enabled = true
+          }
+      notify: Restart Nomad
+
+    - name: Create Nomad systemd service
+      copy:
+        dest: /etc/systemd/system/nomad.service
+        content: |
+          [Unit]
+          Description=Nomad Workload Orchestrator
+          Documentation=https://www.nomadproject.io/
+          Wants=network-online.target
+          After=network-online.target consul.service
+
+          [Service]
+          ExecReload=/bin/kill -HUP $MAINPID
+          ExecStart=/usr/bin/nomad agent -config=/etc/nomad.d
+          KillMode=process
+          KillSignal=SIGINT
+          LimitNOFILE=65536
+          LimitNPROC=infinity
+          Restart=on-failure
+          RestartSec=2
+          TasksMax=infinity
+          OOMScoreAdjust=-1000
+
+          [Install]
+          WantedBy=multi-user.target
+      notify: Restart Nomad
+
+    - name: Enable and start Nomad
+      systemd:
+        name: nomad
+        enabled: yes
+        state: started
+        daemon_reload: yes
+
+  handlers:
+    - name: Restart Nomad
+      systemd:
+        name: nomad
+        state: restarted
+        daemon_reload: yes
+
+- hosts: nomad_clients
+  become: yes
+  vars:
+    nomad_datacenter: "dc1"
+    nomad_data_dir: "/opt/nomad/data"
+    nomad_encrypt_key: "{{ lookup('env', 'NOMAD_ENCRYPT_KEY') | default('cg8StVXbQJ0gPvMd9o7yrg==', true) }}"
+
+  tasks:
+    - name: Add nomad user to docker group
+      user:
+        name: nomad
+        groups: docker
+        append: yes
+
+    - name: Create Nomad client configuration
+      copy:
+        dest: /etc/nomad.d/nomad.hcl
+        owner: nomad
+        group: nomad
+        mode: '0640'
+        content: |
+          datacenter = "{{ nomad_datacenter }}"
+          data_dir   = "{{ nomad_data_dir }}"
+          bind_addr  = "0.0.0.0"
+          
+          advertise {
+            http = "{{ ansible_host }}"
+            rpc  = "{{ ansible_host }}"
+            serf = "{{ ansible_host }}"
+          }
+          
+          server {
+            enabled = false
+          }
+          
+          client {
+            enabled = true
+            
+            server_join {
+              retry_join = [{% for host in groups['nomad_servers'] %}"{{ hostvars[host]['ansible_host'] }}"{% if not loop.last %}, {% endif %}{% endfor %}]
+            }
+            
+            host_volume "docker-sock" {
+              path      = "/var/run/docker.sock"
+              read_only = false
+            }
+          }
+          
+          plugin "docker" {
+            config {
+              allow_privileged = true
+              volumes {
+                enabled = true
+              }
+            }
+          }
+          
+          plugin "raw_exec" {
+            config {
+              enabled = true
+            }
+          }
+          
+          consul {
+            address = "127.0.0.1:8500"
+          }
+          
+          vault {
+            enabled = true
+            address = "http://{{ hostvars[groups['vault_servers'][0]]['ansible_host'] }}:8200"
+          }
+      notify: Restart Nomad
+
+    - name: Create Nomad systemd service
+      copy:
+        dest: /etc/systemd/system/nomad.service
+        content: |
+          [Unit]
+          Description=Nomad Workload Orchestrator
+          Documentation=https://www.nomadproject.io/
+          Wants=network-online.target
+          After=network-online.target consul.service docker.service
+
+          [Service]
+          ExecReload=/bin/kill -HUP $MAINPID
+          ExecStart=/usr/bin/nomad agent -config=/etc/nomad.d
+          KillMode=process
+          KillSignal=SIGINT
+          LimitNOFILE=65536
+          LimitNPROC=infinity
+          Restart=on-failure
+          RestartSec=2
+          TasksMax=infinity
+          OOMScoreAdjust=-1000
+
+          [Install]
+          WantedBy=multi-user.target
+      notify: Restart Nomad
+
+    - name: Enable and start Nomad
+      systemd:
+        name: nomad
+        enabled: yes
+        state: started
+        daemon_reload: yes
+
+  handlers:
+    - name: Restart Nomad
+      systemd:
+        name: nomad
+        state: restarted
+        daemon_reload: yes
+

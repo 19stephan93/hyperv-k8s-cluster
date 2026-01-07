@@ -1,0 +1,58 @@
+- hosts: k8s_masters
+  become: yes
+  tasks:
+  - name: Check if cluster is already initialized
+    stat:
+      path: /etc/kubernetes/admin.conf
+    register: kubeadm_init
+
+  - name: Reset kubeadm if initialization was incomplete
+    shell: kubeadm reset -f
+    when: not kubeadm_init.stat.exists
+
+  - name: Remove old log files
+    file:
+      path: "{{ item }}"
+      state: absent
+    loop:
+      - /root/pod_initialize.log
+      - /home/ubuntu/cni_setup.log
+    when: not kubeadm_init.stat.exists
+
+  - name: Initialize the cluster
+    shell: kubeadm init --pod-network-cidr=10.244.0.0/16 >> /root/pod_initialize.log
+    args:
+      chdir: /root
+    when: not kubeadm_init.stat.exists
+
+  - name: Create directory for kube config file
+    become_user: ubuntu
+    file:
+      path: $HOME/.kube
+      state: directory
+      mode: '0755'
+
+  - name: Copy the kube config to the created directory
+    copy:
+      src: /etc/kubernetes/admin.conf
+      dest: /home/ubuntu/.kube/config
+      remote_src: yes
+      owner: ubuntu
+
+  - name: Install CNI for the cluster
+    become_user: ubuntu
+    shell: kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.30.2/manifests/calico.yaml >> cni_setup.log
+    args:
+      chdir: $HOME
+      creates: cni_setup.log
+
+  - name: Wait for all nodes to be ready
+    become_user: ubuntu
+    shell: kubectl get nodes --no-headers | grep -v " Ready" | wc -l
+    register: nodes_not_ready
+    until: nodes_not_ready.stdout == "0"
+    retries: 30
+    delay: 10
+
+- name: Deploy K8s resources (MetalLB, Envoy Gateway, Dashboard, Examples)
+  import_playbook: deploy_resources_playbook.yml

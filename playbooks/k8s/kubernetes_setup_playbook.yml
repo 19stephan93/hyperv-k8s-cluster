@@ -1,7 +1,17 @@
-- hosts: all
+- hosts: k8s_all
   become: yes
   remote_user: ubuntu
   tasks:
+  - name: Remove old Docker repository files if they exist
+    file:
+      path: "{{ item }}"
+      state: absent
+    loop:
+      - /etc/apt/sources.list.d/docker.list
+      - /etc/apt/sources.list.d/download_docker_com_linux_ubuntu.list
+      - /usr/share/keyrings/docker-archive-keyring.gpg
+    ignore_errors: yes
+
   - name: Update APT packages
     apt:
       update_cache: yes
@@ -68,15 +78,22 @@
       state: directory
       mode: '0755'
 
+
   - name: Download docker GPG key manually
     shell: curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
     args:
       creates: /etc/apt/keyrings/docker.asc
 
+  - name: Set proper permissions on docker GPG key
+    file:
+      path: /etc/apt/keyrings/docker.asc
+      mode: '0644'
+
   - name: Add docker repository
     apt_repository:
       repo: "deb [arch={{ 'amd64' if ansible_architecture == 'x86_64' else 'arm64' }} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
       state: present
+      filename: docker
       update_cache: yes
     
   - name: Install containerd
@@ -89,11 +106,24 @@
       path: /etc/containerd
       state: directory
 
-  - name: Add containerd configuration
-    shell: containerd config default | tee /etc/containerd/config.toml
+  - name: Stop containerd before reconfiguration
+    systemd:
+      name: containerd
+      state: stopped
 
-  - name: Configuring cgroup
-    shell: sed -i 's/SystemdCgroup \= false/SystemdCgroup \= true/g' /etc/containerd/config.toml
+  - name: Remove old containerd configuration if exists
+    file:
+      path: /etc/containerd/config.toml
+      state: absent
+
+  - name: Generate default containerd configuration
+    shell: containerd config default > /etc/containerd/config.toml
+
+  - name: Enable SystemdCgroup in containerd config
+    replace:
+      path: /etc/containerd/config.toml
+      regexp: 'SystemdCgroup = false'
+      replace: 'SystemdCgroup = true'
 
   - name: Restart and enable containerd
     systemd:
@@ -111,6 +141,7 @@
     apt_repository:
       repo: deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.33/deb/ /
       state: present
+      filename: kubernetes
       update_cache: yes
   
   - name: Install kubectl, kubeadm and kubelet

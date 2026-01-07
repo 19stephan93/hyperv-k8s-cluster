@@ -1,0 +1,19 @@
+---
+# Envoy Gateway Installation
+# This file installs Envoy Gateway using the official Helm chart converted to YAML
+#
+# To install Envoy Gateway, run:
+# kubectl apply -f https://github.com/envoyproxy/gateway/releases/download/v1.0.0/install.yaml
+#
+# Or use Helm:
+# helm install eg oci://docker.io/envoyproxy/gateway-helm --version v1.0.0 -n envoy-gateway-system --create-namespace
+#
+# For this setup, we'll use the official installation method:
+# kubectl apply -f https://github.com/envoyproxy/gateway/releases/download/v1.0.0/install.yaml
+#
+# This creates:
+# - envoy-gateway-system namespace
+# - Envoy Gateway controller
+# - Gateway API CRDs
+# - RBAC resources
+

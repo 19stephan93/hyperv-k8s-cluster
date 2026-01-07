@@ -1,0 +1,157 @@
+---
+# Consul Setup Playbook
+# Run: ansible-playbook -i hosts consul_setup_playbook.yml
+
+- hosts: consul_servers
+  become: yes
+  vars:
+    consul_datacenter: "dc1"
+    consul_data_dir: "/opt/consul/data"
+    consul_encrypt_key: "{{ lookup('env', 'CONSUL_ENCRYPT_KEY') | default('pUqJrVyVRj5jsiYEkM/tFQYfWyJIv4s3XkvDwy7Cu5s=', true) }}"
+
+  tasks:
+    - name: Get the IP address of the first server (bootstrap)
+      set_fact:
+        consul_bootstrap_ip: "{{ hostvars[groups['consul_servers'][0]]['ansible_host'] }}"
+
+    - name: Create Consul server configuration
+      copy:
+        dest: /etc/consul.d/consul.hcl
+        owner: consul
+        group: consul
+        mode: '0640'
+        content: |
+          datacenter = "{{ consul_datacenter }}"
+          data_dir = "{{ consul_data_dir }}"
+          
+          client_addr = "0.0.0.0"
+          bind_addr = "{{ ansible_host }}"
+          
+          ui_config {
+            enabled = true
+          }
+          
+          server = true
+          bootstrap_expect = {{ groups['consul_servers'] | length }}
+          
+          encrypt = "{{ consul_encrypt_key }}"
+          
+          retry_join = [{% for host in groups['consul_servers'] %}"{{ hostvars[host]['ansible_host'] }}"{% if not loop.last %}, {% endif %}{% endfor %}]
+          
+          performance {
+            raft_multiplier = 1
+          }
+          
+          acl {
+            enabled = false
+          }
+      notify: Restart Consul
+
+    - name: Create Consul systemd service
+      copy:
+        dest: /etc/systemd/system/consul.service
+        content: |
+          [Unit]
+          Description=Consul Service Discovery Agent
+          Documentation=https://www.consul.io/
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=notify
+          User=consul
+          Group=consul
+          ExecStart=/usr/bin/consul agent -config-dir=/etc/consul.d/
+          ExecReload=/bin/kill -HUP $MAINPID
+          KillMode=process
+          KillSignal=SIGTERM
+          Restart=on-failure
+          RestartSec=5
+          LimitNOFILE=65536
+
+          [Install]
+          WantedBy=multi-user.target
+      notify: Restart Consul
+
+    - name: Enable and start Consul
+      systemd:
+        name: consul
+        enabled: yes
+        state: started
+        daemon_reload: yes
+
+  handlers:
+    - name: Restart Consul
+      systemd:
+        name: consul
+        state: restarted
+        daemon_reload: yes
+
+- hosts: consul_clients
+  become: yes
+  vars:
+    consul_datacenter: "dc1"
+    consul_data_dir: "/opt/consul/data"
+    consul_encrypt_key: "{{ lookup('env', 'CONSUL_ENCRYPT_KEY') | default('pUqJrVyVRj5jsiYEkM/tFQYfWyJIv4s3XkvDwy7Cu5s=', true) }}"
+
+  tasks:
+    - name: Create Consul client configuration
+      copy:
+        dest: /etc/consul.d/consul.hcl
+        owner: consul
+        group: consul
+        mode: '0640'
+        content: |
+          datacenter = "{{ consul_datacenter }}"
+          data_dir = "{{ consul_data_dir }}"
+          
+          client_addr = "0.0.0.0"
+          bind_addr = "{{ ansible_host }}"
+          
+          server = false
+          
+          encrypt = "{{ consul_encrypt_key }}"
+          
+          retry_join = [{% for host in groups['consul_servers'] %}"{{ hostvars[host]['ansible_host'] }}"{% if not loop.last %}, {% endif %}{% endfor %}]
+      notify: Restart Consul
+
+    - name: Create Consul systemd service
+      copy:
+        dest: /etc/systemd/system/consul.service
+        content: |
+          [Unit]
+          Description=Consul Service Discovery Agent
+          Documentation=https://www.consul.io/
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=notify
+          User=consul
+          Group=consul
+          ExecStart=/usr/bin/consul agent -config-dir=/etc/consul.d/
+          ExecReload=/bin/kill -HUP $MAINPID
+          KillMode=process
+          KillSignal=SIGTERM
+          Restart=on-failure
+          RestartSec=5
+          LimitNOFILE=65536
+
+          [Install]
+          WantedBy=multi-user.target
+      notify: Restart Consul
+
+    - name: Enable and start Consul
+      systemd:
+        name: consul
+        enabled: yes
+        state: started
+        daemon_reload: yes
+
+  handlers:
+    - name: Restart Consul
+      systemd:
+        name: consul
+        state: restarted
+        daemon_reload: yes
+

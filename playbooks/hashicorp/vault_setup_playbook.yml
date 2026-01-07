@@ -1,0 +1,146 @@
+---
+# Vault Setup Playbook
+# Run: ansible-playbook -i hosts vault_setup_playbook.yml
+
+- hosts: vault_servers
+  become: yes
+  vars:
+    vault_data_dir: "/opt/vault/data"
+
+  tasks:
+    - name: Create Vault server configuration
+      copy:
+        dest: /etc/vault.d/vault.hcl
+        owner: vault
+        group: vault
+        mode: '0640'
+        content: |
+          ui = true
+          
+          listener "tcp" {
+            address     = "0.0.0.0:8200"
+            tls_disable = 1
+          }
+          
+          storage "raft" {
+            path    = "{{ vault_data_dir }}"
+            node_id = "{{ inventory_hostname }}"
+            {% for host in groups['vault_servers'] %}
+            {% if hostvars[host]['ansible_host'] != ansible_host %}
+            retry_join {
+              leader_api_addr = "http://{{ hostvars[host]['ansible_host'] }}:8200"
+            }
+            {% endif %}
+            {% endfor %}
+          }
+          
+          api_addr     = "http://{{ ansible_host }}:8200"
+          cluster_addr = "http://{{ ansible_host }}:8201"
+          
+          disable_mlock = false
+      notify: Restart Vault
+
+    - name: Ensure Vault data directory has correct ownership
+      file:
+        path: "{{ vault_data_dir }}"
+        owner: vault
+        group: vault
+        state: directory
+        mode: '0750'
+
+    - name: Create Vault systemd service
+      copy:
+        dest: /etc/systemd/system/vault.service
+        content: |
+          [Unit]
+          Description=HashiCorp Vault - A secrets management tool
+          Documentation=https://www.vaultproject.io/
+          After=network-online.target
+          Wants=network-online.target
+          ConditionFileNotEmpty=/etc/vault.d/vault.hcl
+
+          [Service]
+          Type=notify
+          User=vault
+          Group=vault
+          ProtectSystem=full
+          ProtectHome=read-only
+          PrivateTmp=yes
+          PrivateDevices=yes
+          SecureBits=keep-caps
+          AmbientCapabilities=CAP_IPC_LOCK
+          CapabilityBoundingSet=CAP_SYSLOG CAP_IPC_LOCK
+          NoNewPrivileges=yes
+          ExecStart=/usr/bin/vault server -config=/etc/vault.d/vault.hcl
+          ExecReload=/bin/kill -HUP $MAINPID
+          KillMode=process
+          KillSignal=SIGINT
+          Restart=on-failure
+          RestartSec=5
+          TimeoutStopSec=30
+          LimitNOFILE=65536
+          LimitMEMLOCK=infinity
+
+          [Install]
+          WantedBy=multi-user.target
+      notify: Restart Vault
+
+    - name: Enable and start Vault
+      systemd:
+        name: vault
+        enabled: yes
+        state: started
+        daemon_reload: yes
+
+    - name: Wait for Vault to be ready
+      wait_for:
+        port: 8200
+        delay: 5
+        timeout: 60
+
+    - name: Set VAULT_ADDR environment variable for all users
+      lineinfile:
+        path: /etc/environment
+        line: 'VAULT_ADDR="http://127.0.0.1:8200"'
+        create: yes
+
+  handlers:
+    - name: Restart Vault
+      systemd:
+        name: vault
+        state: restarted
+        daemon_reload: yes
+
+# Initialize Vault on the first server only
+- hosts: vault_servers[0]
+  become: yes
+  vars:
+    vault_init_file: "/root/vault_init.json"
+
+  tasks:
+    - name: Check if Vault is initialized
+      shell: VAULT_ADDR=http://127.0.0.1:8200 vault status -format=json 2>/dev/null || true
+      register: vault_status
+      changed_when: false
+
+    - name: Initialize Vault
+      shell: |
+        VAULT_ADDR=http://127.0.0.1:8200 vault operator init -key-shares=5 -key-threshold=3 -format=json > {{ vault_init_file }}
+      when: vault_status.stdout == "" or (vault_status.stdout | from_json).initialized == false
+      register: vault_init
+
+    - name: Display Vault initialization info
+      debug:
+        msg: |
+          =====================================================
+          IMPORTANT: Vault has been initialized!
+          The initialization keys and root token are stored in:
+          {{ vault_init_file }}
+          
+          Please securely store these keys and REMOVE this file!
+          
+          To unseal Vault, run the following 3 times with different keys:
+          vault operator unseal <key>
+          =====================================================
+      when: vault_init.changed
+
