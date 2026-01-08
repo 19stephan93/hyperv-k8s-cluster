@@ -1,6 +1,25 @@
 ---
-# HTTPRoute for Kubernetes Dashboard
-# Apply this after installing the dashboard
+# TLSRoute for Kubernetes Dashboard - SSL Passthrough from external Envoy
+# This handles HTTPS traffic that passes through from the external Envoy proxy
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TLSRoute
+metadata:
+  name: kubernetes-dashboard-tls
+  namespace: kubernetes-dashboard
+spec:
+  parentRefs:
+  - name: eg
+    namespace: envoy-gateway-system
+  hostnames:
+  - "dashboard.k8s.ope.infra.technovateit-solutions.com"
+  rules:
+  - backendRefs:
+    - name: kubernetes-dashboard
+      port: 443
+
+---
+# HTTPRoute for local access (dashboard.k8s.local)
+# This is for internal/local access without external SSL passthrough
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -20,26 +39,4 @@ spec:
     backendRefs:
     - name: kubernetes-dashboard
       port: 443
-
----
-# Alternative: If dashboard service is HTTP only
-# apiVersion: gateway.networking.k8s.io/v1
-# kind: HTTPRoute
-# metadata:
-#   name: kubernetes-dashboard
-#   namespace: kubernetes-dashboard
-# spec:
-#   parentRefs:
-#   - name: eg
-#     namespace: envoy-gateway-system
-#   hostnames:
-#   - "dashboard.k8s.local"
-#   rules:
-#   - matches:
-#     - path:
-#         type: PathPrefix
-#         value: /
-#     backendRefs:
-#     - name: kubernetes-dashboard
-#       port: 80
 

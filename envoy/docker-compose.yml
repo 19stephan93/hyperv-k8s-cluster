@@ -1,0 +1,86 @@
+version: '3.8'
+
+services:
+  envoy:
+    image: envoyproxy/envoy:v1.28-latest
+    container_name: envoy-proxy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "9901:9901"  # Envoy admin interface
+    volumes:
+      - ./envoy.yaml:/etc/envoy/envoy.yaml:ro
+      - ./certs:/etc/letsencrypt:ro
+      - ./logs:/var/log/envoy
+    networks:
+      - envoy-network
+    restart: unless-stopped
+    depends_on:
+      - certbot
+    command: ["-c", "/etc/envoy/envoy.yaml"]
+
+  certbot:
+    image: certbot/dns-google:latest
+    container_name: certbot
+    volumes:
+      - ./certs:/etc/letsencrypt
+      - ./certbot-logs:/var/log/letsencrypt
+      - ${GCP_CREDENTIALS_PATH}:${GCP_CREDENTIALS_CONTAINER_PATH}:ro
+    environment:
+      - GOOGLE_APPLICATION_CREDENTIALS=${GCP_CREDENTIALS_CONTAINER_PATH}
+      - DOMAINS_SSL_TERMINATION=${DOMAINS_SSL_TERMINATION}
+      - DOMAINS_SSL_PASSTHROUGH=${DOMAINS_SSL_PASSTHROUGH}
+      - LETSENCRYPT_EMAIL=${LETSENCRYPT_EMAIL:-admin@technovateit-solutions.com}
+    networks:
+      - envoy-network
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        # Combine all domains for certificate request
+        ALL_DOMAINS="$$DOMAINS_SSL_TERMINATION,$$DOMAINS_SSL_PASSTHROUGH"
+        # Remove trailing/leading commas
+        ALL_DOMAINS=$$(echo $$ALL_DOMAINS | sed 's/^,//;s/,$$//')
+        FIRST_DOMAIN=$$(echo $$ALL_DOMAINS | cut -d',' -f1 | xargs)
+        
+        if [ ! -f /etc/letsencrypt/live/$$FIRST_DOMAIN/fullchain.pem ]; then
+          echo "Requesting certificates for all domains: $$ALL_DOMAINS"
+          CERT_DOMAINS=""
+          for domain in $$(echo $$ALL_DOMAINS | tr ',' ' '); do
+            CERT_DOMAINS="$$CERT_DOMAINS -d $$(echo $$domain | xargs)"
+          done
+          certbot certonly --dns-google --dns-google-credentials $$GOOGLE_APPLICATION_CREDENTIALS --email $$LETSENCRYPT_EMAIL --agree-tos --non-interactive $$CERT_DOMAINS
+        fi
+        trap exit TERM
+        while :; do
+          certbot renew --dns-google --dns-google-credentials $$GOOGLE_APPLICATION_CREDENTIALS --quiet
+          sleep 12h & wait $${!}
+        done
+    restart: unless-stopped
+
+  cert-reloader:
+    image: alpine:latest
+    container_name: cert-reloader
+    volumes:
+      - ./certs:/etc/letsencrypt:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        apk add --no-cache inotify-tools docker-cli
+        while :; do
+          if [ -d /etc/letsencrypt/live/ ]; then
+            inotifywait -e modify,create,delete -r /etc/letsencrypt/live/ 2>/dev/null
+            echo 'Certificate changed, reloading Envoy...'
+            docker exec envoy-proxy kill -HUP 1 || true
+          fi
+          sleep 10
+        done
+    restart: unless-stopped
+    networks:
+      - envoy-network
+
+networks:
+  envoy-network:
+    driver: bridge

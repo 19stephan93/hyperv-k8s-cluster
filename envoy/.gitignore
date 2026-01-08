@@ -1,0 +1,16 @@
+# Sensitive credentials
+gcp-credentials.json
+
+# SSL Certificates
+certs/
+certbot-logs/
+
+# Envoy logs
+logs/
+
+# Environment files
+.env
+
+# Generated configuration
+envoy.yaml
+
