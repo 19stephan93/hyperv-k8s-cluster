@@ -46,7 +46,7 @@ static_resources:
       typed_config:
         "@type": type.googleapis.com/envoy.extensions.filters.listener.tls_inspector.v3.TlsInspector
     filter_chains:
-    # Filter chain for dashboard.k8s.ope.infra.technovateit-solutions.com - SSL passthrough (no termination)
+    # Filter chain for dashboard.k8s.ope.infra.technovateit-solutions.com - SSL passthrough to K8s (no termination)
     - filter_chain_match:
         server_names:
         - "dashboard.k8s.ope.infra.technovateit-solutions.com"
@@ -60,6 +60,7 @@ static_resources:
     - filter_chain_match:
         server_names:
         - "whoami.ope.apps.technovateit-solutions.com"
+        - "whoami-nomad.ope.apps.technovateit-solutions.com"
       filters:
       - name: envoy.filters.network.http_connection_manager
         typed_config:
@@ -77,6 +78,15 @@ static_resources:
                   prefix: "/"
                 route:
                   cluster: k8s_cluster
+                  timeout: 30s
+            - name: whoami-nomad_ope_apps_technovateit-solutions_com
+              domains:
+              - "whoami-nomad.ope.apps.technovateit-solutions.com"
+              routes:
+              - match:
+                  prefix: "/"
+                route:
+                  cluster: nomad_cluster
                   timeout: 30s
           http_filters:
           - name: envoy.filters.http.router
@@ -99,7 +109,7 @@ static_resources:
                 filename: /etc/letsencrypt/live/whoami.ope.apps.technovateit-solutions.com/privkey.pem
 
   clusters:
-  # Cluster for HTTP backend (SSL termination traffic)
+  # Cluster for HTTP backend (SSL termination traffic to K8s)
   - name: k8s_cluster
     connect_timeout: 5s
     type: STRICT_DNS
@@ -124,7 +134,7 @@ static_resources:
         - start: 200
           end: 404
 
-  # Cluster for HTTPS backend (SSL passthrough traffic)
+  # Cluster for HTTPS backend (SSL passthrough traffic to K8s)
   - name: k8s_cluster_https
     connect_timeout: 5s
     type: STRICT_DNS
@@ -137,4 +147,44 @@ static_resources:
             address:
               socket_address:
                 address: 192.168.1.200
+                port_value: 443
+
+  # Cluster for Nomad backend (via Traefik or direct service)
+  - name: nomad_cluster
+    connect_timeout: 5s
+    type: STRICT_DNS
+    lb_policy: ROUND_ROBIN
+    load_assignment:
+      cluster_name: nomad_cluster
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address:
+                address: 192.168.1.161
+                port_value: 8080
+    health_checks:
+    - timeout: 5s
+      interval: 10s
+      unhealthy_threshold: 3
+      healthy_threshold: 2
+      http_health_check:
+        path: "/"
+        expected_statuses:
+        - start: 200
+          end: 404
+
+  # Cluster for HTTPS Nomad backend (SSL passthrough traffic to Nomad)
+  - name: nomad_cluster_https
+    connect_timeout: 5s
+    type: STRICT_DNS
+    lb_policy: ROUND_ROBIN
+    load_assignment:
+      cluster_name: nomad_cluster_https
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address:
+                address: 192.168.1.161
                 port_value: 443

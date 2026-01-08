@@ -1,0 +1,231 @@
+=== Nomad Envoy Ingress Diagnostics ===
+
+0. Checking Consul connectivity...
+Node                Address             Status  Type    Build   Protocol  DC   Partition  Segment
+hashicorp-server-1  192.168.1.150:8301  alive   server  1.22.2  2         dc1  default    <all>
+hashicorp-client-1  192.168.1.161:8301  alive   client  1.22.2  2         dc1  default    <default>
+1. Checking Envoy ingress job status...
+ID            = envoy-ingress
+Name          = envoy-ingress
+Submit Date   = 2026-01-08T00:52:28Z
+Type          = service
+Priority      = 50
+Datacenters   = dc1
+Namespace     = default
+Node Pool     = default
+Status        = running
+Periodic      = false
+Parameterized = false
+
+Summary
+Task Group  Queued  Starting  Running  Failed  Complete  Lost  Unknown
+envoy       0       0         1        0       0         0     0
+
+Latest Deployment
+ID          = 5d4ad3e2
+Status      = successful
+Description = Deployment completed successfully
+
+Deployed
+Task Group  Desired  Placed  Healthy  Unhealthy  Progress Deadline
+envoy       1        1       1        0          2026-01-08T01:03:03Z
+
+Allocations
+ID        Node ID   Task Group  Version  Desired  Status   Created     Modified
+28fc419b  a65fa391  envoy       0        run      running  11m52s ago  11m17s ago
+
+2. Getting Envoy ingress allocation...
+Allocation ID: 28fc419b
+
+3. Checking Envoy allocation details...
+ID                  = 28fc419b-df7a-e1b6-d03a-18ad3209f120
+Eval ID             = 5658a35b
+Name                = envoy-ingress.envoy[0]
+Node ID             = a65fa391
+Node Name           = hashicorp-client-1
+Job ID              = envoy-ingress
+Job Version         = 0
+Client Status       = running
+Client Description  = Tasks are running
+Desired Status      = run
+Desired Description = <none>
+Created             = 11m52s ago
+Modified            = 11m17s ago
+Deployment ID       = 5d4ad3e2
+Deployment Health   = healthy
+
+Allocation Addresses:
+Label   Dynamic  Address
+*http   yes      192.168.1.161:8080 -> 8080
+*admin  yes      192.168.1.161:9901 -> 9901
+
+4. Getting Node IP...
+
+
+==> View allocation details in the Web UI: http://127.0.0.1:4646/ui/allocations/28fc419b-df7a-e1b6-d03a-18ad3209f120
+Node Name: hashicorp-client-1
+Node Address: 192.168.1.161
+
+5. Checking generated Envoy configuration...
+Fetching envoy.yaml from allocation...
+Found config at: envoy/local/envoy.yaml
+admin:
+  address:
+    socket_address:
+      address: 0.0.0.0
+      port_value: 9901
+
+static_resources:
+  listeners:
+  - name: http_listener
+    address:
+      socket_address:
+        address: 0.0.0.0
+        port_value: 8080
+    filter_chains:
+    - filters:
+      - name: envoy.filters.network.http_connection_manager
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+          stat_prefix: ingress_http
+          codec_type: AUTO
+          route_config:
+            name: local_route
+            virtual_hosts:
+            - name: whoami_service
+              domains: ["*"]
+              routes:
+              - match:
+                  prefix: "/"
+                route:
+                  cluster: whoami_cluster
+                  timeout: 30s
+          http_filters:
+          - name: envoy.filters.http.router
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+  clusters:
+  - name: whoami_cluster
+    connect_timeout: 5s
+    type: STRICT_DNS
+    dns_lookup_family: V4_ONLY
+    lb_policy: ROUND_ROBIN
+    load_assignment:
+      cluster_name: whoami_cluster
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address:
+                address: 192.168.1.161
+                port_value: 28602
+        - endpoint:
+            address:
+              socket_address:
+                address: 192.168.1.161
+                port_value: 27328
+    health_checks:
+    - timeout: 5s
+      interval: 10s
+      unhealthy_threshold: 3
+      healthy_threshold: 2
+      http_health_check:
+        path: "/"
+        expected_statuses:
+        - start: 200
+          end: 404
+
+6. Checking Consul service registration for whoami...
+✓ Whoami service is registered in Consul
+
+Service instances:
+  - 192.168.1.161:28602
+  - 192.168.1.161:27328
+
+7. Checking whoami job status...
+ID            = whoami
+Name          = whoami
+Submit Date   = 2026-01-08T00:39:01Z
+Type          = service
+Priority      = 50
+Datacenters   = dc1
+Namespace     = default
+Node Pool     = default
+Status        = running
+Periodic      = false
+Parameterized = false
+
+Summary
+Task Group  Queued  Starting  Running  Failed  Complete  Lost  Unknown
+whoami      0       0         2        0       0         0     0
+
+Latest Deployment
+ID          = 9d2af543
+Status      = successful
+Description = Deployment completed successfully
+
+Deployed
+Task Group  Auto Revert  Desired  Placed  Healthy  Unhealthy  Progress Deadline
+whoami      true         2        2       2        0          2026-01-08T00:49:53Z
+
+Allocations
+ID        Node ID   Task Group  Version  Desired  Status   Created     Modified
+53d30b59  a65fa391  whoami      0        run      running  25m20s ago  24m33s ago
+c34a4cb5  a65fa391  whoami      0        run      running  25m20s ago  24m26s ago
+
+8. Checking Envoy allocation logs for errors...
+--- Last 30 lines of stdout (look for template errors) ---
+
+--- Last 10 lines of stderr ---
+[2026-01-08 00:52:43.120][1][info][config] [source/server/configuration_impl.cc:124] loading 1 cluster(s)
+[2026-01-08 00:52:43.129][1][info][config] [source/server/configuration_impl.cc:128] loading 1 listener(s)
+[2026-01-08 00:52:43.130][1][warning][misc] [source/extensions/filters/network/http_connection_manager/config.cc:82] internal_address_config is not configured. The existing default behaviour will trust RFC1918 IP addresses, but this will be changed in next release. Please explictily config internal address config as the migration step.
+[2026-01-08 00:52:43.131][1][info][config] [source/server/configuration_impl.cc:145] loading stats configuration
+[2026-01-08 00:52:43.132][1][warning][main] [source/server/server.cc:893] There is no configured limit to the number of allowed active downstream connections. Configure a limit in `envoy.resource_monitors.downstream_connections` resource monitor.
+[2026-01-08 00:52:43.132][1][info][main] [source/server/server.cc:934] starting main dispatch loop
+[2026-01-08 00:52:43.133][1][info][runtime] [source/common/runtime/runtime_impl.cc:579] RTDS has finished initialization
+[2026-01-08 00:52:43.133][1][info][upstream] [source/common/upstream/cluster_manager_impl.cc:226] cm init: all clusters initialized
+[2026-01-08 00:52:43.133][1][info][main] [source/server/server.cc:915] all clusters initialized. initializing init manager
+[2026-01-08 00:52:43.133][1][info][config] [source/extensions/listener_managers/listener_manager/listener_manager_impl.cc:923] all dependencies initialized. starting workers
+
+9. Testing connectivity...
+Envoy HTTP should be at: http://192.168.1.161:8080/
+Envoy Admin should be at: http://192.168.1.161:9901/
+
+Testing admin interface...
+✓ Admin interface is reachable
+cluster.whoami_cluster.assignment_stale: 0
+cluster.whoami_cluster.assignment_timeout_received: 0
+cluster.whoami_cluster.assignment_use_cached: 0
+cluster.whoami_cluster.bind_errors: 0
+cluster.whoami_cluster.circuit_breakers.default.cx_open: 0
+
+Testing HTTP endpoint...
+✓ HTTP endpoint returned 200 OK
+
+Response body:
+Hostname: ecd3d0d8a170
+IP: 127.0.0.1
+IP: ::1
+IP: 172.17.0.4
+RemoteAddr: 172.17.0.1:60888
+GET / HTTP/1.1
+Host: 192.168.1.161:8080
+User-Agent: curl/8.5.0
+Accept: */*
+X-Envoy-Expected-Rq-Timeout-Ms: 30000
+X-Forwarded-Proto: http
+X-Request-Id: 3eb47d3f-d81d-4c64-a3b4-a6706f4f45ae
+
+
+=== Diagnostics Complete ===
+
+=== SUMMARY ===
+✅ SUCCESS: Envoy ingress is fully operational at 192.168.1.161:8080
+
+Next steps:
+2. Update your external Envoy .env with: NOMAD_CLUSTER_IP=192.168.1.161
+3. Regenerate external Envoy config: cd ../../envoy && ./generate-envoy-config.sh
+4. Restart external Envoy: docker compose restart envoy
+ubuntu@hashicorp-server-1:~$

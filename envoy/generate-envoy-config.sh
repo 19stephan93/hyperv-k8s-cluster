@@ -15,17 +15,19 @@ sed -i 's/\r$//' .env 2>/dev/null || sed -i '' 's/\r$//' .env 2>/dev/null
 source .env
 
 # Combine all domains for certificate request
-ALL_DOMAINS="${DOMAINS_SSL_TERMINATION},${DOMAINS_SSL_PASSTHROUGH}"
+ALL_DOMAINS="${DOMAINS_K8S_SSL_TERMINATION},${DOMAINS_NOMAD_SSL_TERMINATION},${DOMAINS_K8S_SSL_PASSTHROUGH},${DOMAINS_NOMAD_SSL_PASSTHROUGH}"
 # Remove trailing/leading commas and clean up
-ALL_DOMAINS=$(echo "$ALL_DOMAINS" | sed 's/^,//;s/,$//')
+ALL_DOMAINS=$(echo "$ALL_DOMAINS" | sed 's/^,//;s/,$//;s/,,*/,/g')
 
 # Get the first domain for certificate path
 FIRST_DOMAIN=$(echo "$ALL_DOMAINS" | cut -d',' -f1 | xargs)
 
 # Build virtual hosts for SSL termination domains
 VIRTUAL_HOSTS=""
-if [ -n "$DOMAINS_SSL_TERMINATION" ]; then
-    IFS=',' read -ra TERM_ARRAY <<< "$DOMAINS_SSL_TERMINATION"
+
+# Add K8s SSL termination domains
+if [ -n "$DOMAINS_K8S_SSL_TERMINATION" ]; then
+    IFS=',' read -ra TERM_ARRAY <<< "$DOMAINS_K8S_SSL_TERMINATION"
     for domain in "${TERM_ARRAY[@]}"; do
         domain=$(echo "$domain" | xargs)  # trim whitespace
         if [ -n "$domain" ]; then
@@ -38,6 +40,26 @@ if [ -n "$DOMAINS_SSL_TERMINATION" ]; then
                   prefix: \"/\"
                 route:
                   cluster: k8s_cluster
+                  timeout: 30s"
+        fi
+    done
+fi
+
+# Add Nomad SSL termination domains
+if [ -n "$DOMAINS_NOMAD_SSL_TERMINATION" ]; then
+    IFS=',' read -ra TERM_ARRAY <<< "$DOMAINS_NOMAD_SSL_TERMINATION"
+    for domain in "${TERM_ARRAY[@]}"; do
+        domain=$(echo "$domain" | xargs)  # trim whitespace
+        if [ -n "$domain" ]; then
+            VIRTUAL_HOSTS="${VIRTUAL_HOSTS}
+            - name: ${domain//./_}
+              domains:
+              - \"$domain\"
+              routes:
+              - match:
+                  prefix: \"/\"
+                route:
+                  cluster: nomad_cluster
                   timeout: 30s"
         fi
     done
@@ -95,14 +117,14 @@ static_resources:
     filter_chains:
 EOF
 
-# Add SSL passthrough filter chains
-if [ -n "$DOMAINS_SSL_PASSTHROUGH" ]; then
-    IFS=',' read -ra PASS_ARRAY <<< "$DOMAINS_SSL_PASSTHROUGH"
+# Add K8s SSL passthrough filter chains
+if [ -n "$DOMAINS_K8S_SSL_PASSTHROUGH" ]; then
+    IFS=',' read -ra PASS_ARRAY <<< "$DOMAINS_K8S_SSL_PASSTHROUGH"
     for domain in "${PASS_ARRAY[@]}"; do
         domain=$(echo "$domain" | xargs)
         if [ -n "$domain" ]; then
             cat >> envoy.yaml << EOF
-    # Filter chain for $domain - SSL passthrough (no termination)
+    # Filter chain for $domain - SSL passthrough to K8s (no termination)
     - filter_chain_match:
         server_names:
         - "$domain"
@@ -117,8 +139,33 @@ EOF
     done
 fi
 
+# Add Nomad SSL passthrough filter chains
+if [ -n "$DOMAINS_NOMAD_SSL_PASSTHROUGH" ]; then
+    IFS=',' read -ra PASS_ARRAY <<< "$DOMAINS_NOMAD_SSL_PASSTHROUGH"
+    for domain in "${PASS_ARRAY[@]}"; do
+        domain=$(echo "$domain" | xargs)
+        if [ -n "$domain" ]; then
+            cat >> envoy.yaml << EOF
+    # Filter chain for $domain - SSL passthrough to Nomad (no termination)
+    - filter_chain_match:
+        server_names:
+        - "$domain"
+      filters:
+      - name: envoy.filters.network.tcp_proxy
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
+          stat_prefix: ${domain//./_}_passthrough
+          cluster: nomad_cluster_https
+EOF
+        fi
+    done
+fi
+
 # Add SSL termination filter chain
-if [ -n "$DOMAINS_SSL_TERMINATION" ]; then
+SSL_TERMINATION_DOMAINS="${DOMAINS_K8S_SSL_TERMINATION},${DOMAINS_NOMAD_SSL_TERMINATION}"
+SSL_TERMINATION_DOMAINS=$(echo "$SSL_TERMINATION_DOMAINS" | sed 's/^,//;s/,$//;s/,,*/,/g')
+
+if [ -n "$SSL_TERMINATION_DOMAINS" ]; then
     cat >> envoy.yaml << EOF
     # Filter chain for SSL termination domains
     - filter_chain_match:
@@ -126,7 +173,7 @@ if [ -n "$DOMAINS_SSL_TERMINATION" ]; then
 EOF
 
     # Add all SSL termination domains to server_names
-    IFS=',' read -ra TERM_ARRAY <<< "$DOMAINS_SSL_TERMINATION"
+    IFS=',' read -ra TERM_ARRAY <<< "$SSL_TERMINATION_DOMAINS"
     for domain in "${TERM_ARRAY[@]}"; do
         domain=$(echo "$domain" | xargs)
         if [ -n "$domain" ]; then
@@ -171,7 +218,7 @@ fi
 cat >> envoy.yaml << EOF
 
   clusters:
-  # Cluster for HTTP backend (SSL termination traffic)
+  # Cluster for HTTP backend (SSL termination traffic to K8s)
   - name: k8s_cluster
     connect_timeout: 5s
     type: STRICT_DNS
@@ -196,7 +243,7 @@ cat >> envoy.yaml << EOF
         - start: 200
           end: 404
 
-  # Cluster for HTTPS backend (SSL passthrough traffic)
+  # Cluster for HTTPS backend (SSL passthrough traffic to K8s)
   - name: k8s_cluster_https
     connect_timeout: 5s
     type: STRICT_DNS
@@ -210,10 +257,53 @@ cat >> envoy.yaml << EOF
               socket_address:
                 address: ${K8S_CLUSTER_IP}
                 port_value: 443
+
+  # Cluster for Nomad backend (via Traefik or direct service)
+  - name: nomad_cluster
+    connect_timeout: 5s
+    type: STRICT_DNS
+    lb_policy: ROUND_ROBIN
+    load_assignment:
+      cluster_name: nomad_cluster
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address:
+                address: ${NOMAD_CLUSTER_IP}
+                port_value: ${NOMAD_CLUSTER_PORT}
+    health_checks:
+    - timeout: 5s
+      interval: 10s
+      unhealthy_threshold: 3
+      healthy_threshold: 2
+      http_health_check:
+        path: "/"
+        expected_statuses:
+        - start: 200
+          end: 404
+
+  # Cluster for HTTPS Nomad backend (SSL passthrough traffic to Nomad)
+  - name: nomad_cluster_https
+    connect_timeout: 5s
+    type: STRICT_DNS
+    lb_policy: ROUND_ROBIN
+    load_assignment:
+      cluster_name: nomad_cluster_https
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address:
+                address: ${NOMAD_CLUSTER_IP}
+                port_value: 443
 EOF
 
 echo "✓ envoy.yaml generated successfully"
 echo "✓ All domains for certificates: $ALL_DOMAINS"
-echo "✓ SSL Termination domains: $DOMAINS_SSL_TERMINATION"
-echo "✓ SSL Passthrough domains: $DOMAINS_SSL_PASSTHROUGH"
-echo "✓ Using K8s cluster IP: $K8S_CLUSTER_IP"
+echo "✓ K8s SSL Termination: $DOMAINS_K8S_SSL_TERMINATION"
+echo "✓ K8s SSL Passthrough: $DOMAINS_K8S_SSL_PASSTHROUGH"
+echo "✓ Nomad SSL Termination: $DOMAINS_NOMAD_SSL_TERMINATION"
+echo "✓ Nomad SSL Passthrough: $DOMAINS_NOMAD_SSL_PASSTHROUGH"
+echo "✓ Using K8s cluster: $K8S_CLUSTER_IP"
+echo "✓ Using Nomad cluster: $NOMAD_CLUSTER_IP:$NOMAD_CLUSTER_PORT"

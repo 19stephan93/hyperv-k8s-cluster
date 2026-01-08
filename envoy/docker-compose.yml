@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   envoy:
     image: envoyproxy/envoy:v1.28-latest
@@ -10,14 +8,64 @@ services:
       - "9901:9901"  # Envoy admin interface
     volumes:
       - ./envoy.yaml:/etc/envoy/envoy.yaml:ro
-      - ./certs:/etc/letsencrypt:ro
+      - ./certs:/etc/letsencrypt-original:ro
       - ./logs:/var/log/envoy
+      - certs-resolved:/etc/letsencrypt
     networks:
       - envoy-network
     restart: unless-stopped
     depends_on:
-      - certbot
+      cert-resolver:
+        condition: service_completed_successfully
     command: ["-c", "/etc/envoy/envoy.yaml"]
+
+  cert-resolver:
+    image: alpine:latest
+    container_name: cert-resolver
+    volumes:
+      - ./certs:/etc/letsencrypt-original:ro
+      - certs-resolved:/etc/letsencrypt
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        echo "Resolving certificate symlinks..."
+        rm -rf /etc/letsencrypt/*
+        
+        # Copy and resolve symlinks from archive
+        if [ -d /etc/letsencrypt-original/archive ]; then
+          mkdir -p /etc/letsencrypt/archive
+          cp -rL /etc/letsencrypt-original/archive/* /etc/letsencrypt/archive/ 2>/dev/null || true
+        fi
+        
+        # Create live directory structure with resolved symlinks
+        if [ -d /etc/letsencrypt-original/live ]; then
+          for domain_dir in /etc/letsencrypt-original/live/*/; do
+            if [ -d "$$domain_dir" ]; then
+              domain=$$(basename "$$domain_dir")
+              mkdir -p "/etc/letsencrypt/live/$$domain"
+              
+              # Copy and dereference symlinks
+              for file in fullchain.pem privkey.pem cert.pem chain.pem; do
+                if [ -e "$$domain_dir$$file" ]; then
+                  cp -L "$$domain_dir$$file" "/etc/letsencrypt/live/$$domain/$$file"
+                fi
+              done
+              
+              echo "Resolved certificates for $$domain"
+            fi
+          done
+        fi
+        
+        # Verify the fullchain has both certs
+        for domain_dir in /etc/letsencrypt/live/*/; do
+          if [ -d "$$domain_dir" ]; then
+            count=$$(grep -c "BEGIN CERTIFICATE" "$$domain_dir/fullchain.pem" 2>/dev/null || echo 0)
+            echo "$$domain_dir fullchain.pem contains $$count certificate(s)"
+          fi
+        done
+        
+        echo "Certificate resolution complete"
 
   certbot:
     image: certbot/dns-google:latest
@@ -28,8 +76,10 @@ services:
       - ${GCP_CREDENTIALS_PATH}:${GCP_CREDENTIALS_CONTAINER_PATH}:ro
     environment:
       - GOOGLE_APPLICATION_CREDENTIALS=${GCP_CREDENTIALS_CONTAINER_PATH}
-      - DOMAINS_SSL_TERMINATION=${DOMAINS_SSL_TERMINATION}
-      - DOMAINS_SSL_PASSTHROUGH=${DOMAINS_SSL_PASSTHROUGH}
+      - DOMAINS_K8S_SSL_TERMINATION=${DOMAINS_K8S_SSL_TERMINATION}
+      - DOMAINS_NOMAD_SSL_TERMINATION=${DOMAINS_NOMAD_SSL_TERMINATION}
+      - DOMAINS_K8S_SSL_PASSTHROUGH=${DOMAINS_K8S_SSL_PASSTHROUGH}
+      - DOMAINS_NOMAD_SSL_PASSTHROUGH=${DOMAINS_NOMAD_SSL_PASSTHROUGH}
       - LETSENCRYPT_EMAIL=${LETSENCRYPT_EMAIL:-admin@technovateit-solutions.com}
     networks:
       - envoy-network
@@ -38,19 +88,37 @@ services:
       - -c
       - |
         # Combine all domains for certificate request
-        ALL_DOMAINS="$$DOMAINS_SSL_TERMINATION,$$DOMAINS_SSL_PASSTHROUGH"
-        # Remove trailing/leading commas
-        ALL_DOMAINS=$$(echo $$ALL_DOMAINS | sed 's/^,//;s/,$$//')
+        ALL_DOMAINS="$$DOMAINS_K8S_SSL_TERMINATION,$$DOMAINS_NOMAD_SSL_TERMINATION,$$DOMAINS_K8S_SSL_PASSTHROUGH,$$DOMAINS_NOMAD_SSL_PASSTHROUGH"
+        # Remove trailing/leading commas and clean up
+        ALL_DOMAINS=$$(echo $$ALL_DOMAINS | sed 's/^,//;s/,$$//;s/,,*/,/g')
         FIRST_DOMAIN=$$(echo $$ALL_DOMAINS | cut -d',' -f1 | xargs)
         
+        # Build domain flags
+        CERT_DOMAINS=""
+        for domain in $$(echo $$ALL_DOMAINS | tr ',' ' '); do
+          CERT_DOMAINS="$$CERT_DOMAINS -d $$(echo $$domain | xargs)"
+        done
+        
+        # Check if certificate exists
         if [ ! -f /etc/letsencrypt/live/$$FIRST_DOMAIN/fullchain.pem ]; then
           echo "Requesting certificates for all domains: $$ALL_DOMAINS"
-          CERT_DOMAINS=""
-          for domain in $$(echo $$ALL_DOMAINS | tr ',' ' '); do
-            CERT_DOMAINS="$$CERT_DOMAINS -d $$(echo $$domain | xargs)"
-          done
           certbot certonly --dns-google --dns-google-credentials $$GOOGLE_APPLICATION_CREDENTIALS --email $$LETSENCRYPT_EMAIL --agree-tos --non-interactive $$CERT_DOMAINS
+        else
+          # Check if all domains are in the current certificate
+          CURRENT_DOMAINS=$$(openssl x509 -in /etc/letsencrypt/live/$$FIRST_DOMAIN/fullchain.pem -noout -text 2>/dev/null | grep -A1 "Subject Alternative Name" | tail -1 | sed 's/DNS://g' | tr ',' '\n' | xargs | tr ' ' ',')
+          SORTED_CURRENT=$$(echo $$CURRENT_DOMAINS | tr ',' '\n' | sort | tr '\n' ',' | sed 's/,$$//')
+          SORTED_REQUESTED=$$(echo $$ALL_DOMAINS | tr ',' '\n' | sort | tr '\n' ',' | sed 's/,$$//')
+          
+          if [ "$$SORTED_CURRENT" != "$$SORTED_REQUESTED" ]; then
+            echo "Domain list changed. Current: $$CURRENT_DOMAINS"
+            echo "Requested: $$ALL_DOMAINS"
+            echo "Requesting new certificate with --force-renewal..."
+            certbot certonly --dns-google --dns-google-credentials $$GOOGLE_APPLICATION_CREDENTIALS --email $$LETSENCRYPT_EMAIL --agree-tos --non-interactive --force-renewal $$CERT_DOMAINS
+          else
+            echo "Certificate already covers all requested domains: $$ALL_DOMAINS"
+          fi
         fi
+        
         trap exit TERM
         while :; do
           certbot renew --dns-google --dns-google-credentials $$GOOGLE_APPLICATION_CREDENTIALS --quiet
@@ -84,3 +152,6 @@ services:
 networks:
   envoy-network:
     driver: bridge
+
+volumes:
+  certs-resolved:
