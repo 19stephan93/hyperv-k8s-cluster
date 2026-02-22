@@ -63,6 +63,15 @@ This project automates the setup of a local Kubernetes cluster and HashiCorp sta
 > **Note:** K8s and HashiCorp stacks use **separate Terraform directories** with independent state files, so they won't interfere with each other.
 
 ---
+---
+## Troubleshooting
+
+### Kubernetes Envoy Gateway Not Updating Routes
+```kubectl rollout restart deployment envoy-envoy-gateway-system-eg-5391c79d -n envoy-gateway-system```
+
+### Nomad 
+
+---
 
 ## Setup Instructions
 
