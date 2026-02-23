@@ -40,9 +40,18 @@ REM Example: DOMAINS=whoami.ope.apps.technovateit-solutions.com,api.ope.apps.tec
 
 **Example .env:**
 ```env
-DOMAINS=whoami.ope.apps.technovateit-solutions.com,api.ope.apps.technovateit-solutions.com
+# Domains for SSL termination (Envoy decrypts HTTPS, forwards HTTP to backend)
+DOMAINS_K8S_SSL_TERMINATION=whoami.ope.apps.technovateit-solutions.com,fintech-platform.ope.apps.technovateit-solutions.com,auth.ope.apps.technovateit-solutions.com
+DOMAINS_NOMAD_SSL_TERMINATION=
+
+# Domains for SSL passthrough (Envoy forwards HTTPS as-is to backend)
+DOMAINS_K8S_SSL_PASSTHROUGH=dashboard.k8s.ope.infra.technovateit-solutions.com
+DOMAINS_NOMAD_SSL_PASSTHROUGH=
+
 LETSENCRYPT_EMAIL=admin@technovateit-solutions.com
 K8S_CLUSTER_IP=192.168.1.200
+NOMAD_CLUSTER_IP=192.168.1.161
+NOMAD_CLUSTER_PORT=8080
 GCP_CREDENTIALS_PATH=./gcp-credentials.json
 GCP_CREDENTIALS_CONTAINER_PATH=/gcp-credentials.json
 ```
@@ -111,29 +120,30 @@ hostnames:
 
 To add more domains:
 
-1. **Update .env file:**
-   ```env
-   DOMAINS=whoami.ope.apps.technovateit-solutions.com,api.ope.apps.technovateit-solutions.com,dashboard.ope.apps.technovateit-solutions.com
-   ```
+1. **Update .env file** — add the domain to the appropriate variable:
+   - `DOMAINS_K8S_SSL_TERMINATION` — Envoy terminates TLS, forwards HTTP to K8s
+   - `DOMAINS_NOMAD_SSL_TERMINATION` — same, but forwards to Nomad
+   - `DOMAINS_K8S_SSL_PASSTHROUGH` — Envoy passes TLS through to K8s (for services with their own certs)
+   - `DOMAINS_NOMAD_SSL_PASSTHROUGH` — same, but passes to Nomad
 
 2. **Regenerate Envoy configuration:**
    ```bash
    # Windows
    generate-envoy-config.bat
-   
+
    # Linux/WSL/Mac
    ./generate-envoy-config.sh
    ```
 
-3. **Recreate the containers:**
+3. **Recreate the containers** (Certbot detects domain changes and requests a new SAN cert):
    ```bash
-   docker-compose down
-   docker-compose up -d
+   docker compose down
+   docker compose up -d
    ```
 
-4. **Update K8s ingress** to accept the new domains
+4. **Create DNS A record** for the new domain pointing to the external Envoy's public IP
 
-The certbot service will automatically request a certificate that covers all domains in a single certificate.
+5. **Create K8s HTTPRoute** for the new hostname in `devops/k8s/base/ingress/httproutes.yaml`
 
 ## Architecture
 
@@ -261,9 +271,14 @@ All configuration is managed through the `.env` file:
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `DOMAINS` | Comma-separated list of domains to secure | `whoami.example.com,api.example.com` |
+| `DOMAINS_K8S_SSL_TERMINATION` | K8s domains — Envoy terminates TLS, forwards HTTP | `whoami.ope.apps.example.com,app.ope.apps.example.com` |
+| `DOMAINS_NOMAD_SSL_TERMINATION` | Nomad domains — Envoy terminates TLS, forwards HTTP | `whoami-nomad.ope.apps.example.com` |
+| `DOMAINS_K8S_SSL_PASSTHROUGH` | K8s domains — Envoy passes TLS through as-is | `dashboard.k8s.ope.infra.example.com` |
+| `DOMAINS_NOMAD_SSL_PASSTHROUGH` | Nomad domains — Envoy passes TLS through as-is | |
 | `LETSENCRYPT_EMAIL` | Email for Let's Encrypt notifications | `admin@example.com` |
-| `K8S_CLUSTER_IP` | IP address of your Kubernetes cluster | `192.168.1.200` |
+| `K8S_CLUSTER_IP` | K8s Envoy Gateway IP (MetalLB) | `192.168.1.200` |
+| `NOMAD_CLUSTER_IP` | Nomad ingress IP | `192.168.1.161` |
+| `NOMAD_CLUSTER_PORT` | Nomad ingress port | `8080` |
 | `GCP_CREDENTIALS_PATH` | Path to GCP service account JSON (host) | `./gcp-credentials.json` |
 | `GCP_CREDENTIALS_CONTAINER_PATH` | Path inside certbot container | `/gcp-credentials.json` |
 
