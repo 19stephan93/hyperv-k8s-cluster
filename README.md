@@ -429,22 +429,36 @@ You should see:
 
 ---
 
-## External Envoy Proxy (Future)
+## External Envoy Proxy (Live)
 
-The architecture is designed to support an external Envoy proxy for SSL termination and unified routing:
+An external Envoy proxy handles SSL termination and routes internet traffic to K8s and Nomad:
 
 ```
-External Envoy (SSL termination)
-         |
-         |--- HTTP ---> K8s Envoy Gateway (MetalLB IP) ---> Services
-         |
-         |--- HTTP ---> Nomad Consul Ingress Gateway ---> Services
+Internet (HTTPS)
+   ↓
+Router (Port Forward 80, 443)
+   ↓
+External Envoy (Docker Compose — hyperv-k8s-cluster/envoy/)
+   ├─ Port 80  → Redirect to HTTPS
+   └─ Port 443 → TLS termination (Let's Encrypt via DNS-01 + GCP Cloud DNS)
+       ├─ SSL Termination → HTTP → K8s Envoy Gateway (192.168.1.200:80)
+       └─ SSL Passthrough → HTTPS → K8s Envoy Gateway (192.168.1.200:443)
 ```
 
-This allows:
-- Single SSL certificate management point
-- Routing based on hostname/path to either K8s or Nomad
-- Both clusters operate with HTTP only internally
+### Exposed Services (Internet-Facing)
+
+| Hostname | Target | Notes |
+|----------|--------|-------|
+| `fintech-platform.ope.apps.technovateit-solutions.com` | Web UI + API (`/v1/*`) | Trading platform |
+| `auth.ope.apps.technovateit-solutions.com` | Keycloak (`/realms/*` + `/resources/*` only) | OAuth2/OIDC — admin console blocked |
+| `whoami.ope.apps.technovateit-solutions.com` | Whoami test app | Verify connectivity |
+| `dashboard.k8s.ope.infra.technovateit-solutions.com` | K8s Dashboard | TLS passthrough |
+
+### Internal-Only Services (*.apex.local)
+
+Grafana, Prometheus, Qdrant, Pattern Query API, and direct Kotlin Gateway access remain on `*.apex.local` hostnames — not exposed to the internet.
+
+See `hyperv-k8s-cluster/envoy/README.md` for setup details and `devops/DEPLOY_EXTERNAL_ACCESS.md` for deployment instructions.
 
 ---
 
