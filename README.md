@@ -350,8 +350,9 @@ scp *.tar ubuntu@<worker-ip>:~/
 ssh ubuntu@<worker-ip> "sudo ctr -n k8s.io images import ~/pattern-query-api.tar && sudo ctr -n k8s.io images import ~/kotlin-gateway.tar && sudo ctr -n k8s.io images import ~/web-ui.tar"
 ```
 
-**Generate secrets and deploy:**
+**Fix scheduler RBAC, generate secrets, and deploy:**
 ```bash
+./devops/k8s/fix-scheduler-rbac.sh
 ./devops/k8s/generate-secrets.sh --overlay prod
 ./devops/k8s/start-k8s-local.sh --overlay prod
 ```
