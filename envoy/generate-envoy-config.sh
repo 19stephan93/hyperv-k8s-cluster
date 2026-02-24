@@ -190,8 +190,15 @@ EOF
           "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
           stat_prefix: ingress_https
           codec_type: AUTO
+          scheme_header_transformation:
+            scheme_to_overwrite: https
           route_config:
             name: https_route
+            request_headers_to_add:
+            - header:
+                key: X-Forwarded-Proto
+                value: https
+              append_action: OVERWRITE_IF_EXISTS_OR_ADD
             virtual_hosts:${VIRTUAL_HOSTS}
           http_filters:
           - name: envoy.filters.http.router

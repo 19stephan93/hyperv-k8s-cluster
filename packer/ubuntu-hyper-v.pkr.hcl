@@ -30,7 +30,7 @@ source "hyperv-iso" "ubuntu" {
   cpus                = 4 # 4 cores
   memory              = 4096 # 4gb
 
-  disk_size           = 10000 # 10gb
+  disk_size           = 512000 # 500gb (dynamic vhdx — only used space consumed on host)
   enable_secure_boot  = false
   boot_wait           = "5s"
 

@@ -24,18 +24,18 @@ locals {
     {
       name = "k8s-cp-001"
       # Change to the outputed packer image
-      vhdx_path = "E:\\projects\\technovateit-solutions\\hyperv-k8s-cluster\\hdds\\ubuntu-packer-k8s-cp-1.vhdx"
+      vhdx_path = "C:\\projects\\personal\\fintech\\apex_fintech_platform\\hyperv-k8s-cluster\\hdds\\ubuntu-packer-k8s-cp-1.vhdx"
       mac_address = "00:15:5D:01:80:70",
-      memory_mb = 6144,
+      memory_mb = 8192,
       cpu_count = 4
     },
     {
       name = "k8s-worker-001"
       # Change to the outputed packer image
-      vhdx_path = "E:\\projects\\technovateit-solutions\\hyperv-k8s-cluster\\hdds\\ubuntu-packer-k8s-worker-1.vhdx"
+      vhdx_path = "C:\\projects\\personal\\fintech\\apex_fintech_platform\\hyperv-k8s-cluster\\hdds\\ubuntu-packer-k8s-worker-1.vhdx"
       mac_address = "00:15:5D:01:80:81",
-      memory_mb = 12288,
-      cpu_count = 6
+      memory_mb = 40960,
+      cpu_count = 10
     }
   ]
 }
@@ -59,7 +59,7 @@ resource "hyperv_machine_instance" "node" {
     expose_virtualization_extensions                  = false
     hw_thread_count_per_core                          = 0
     maximum                                           = 100
-    maximum_count_per_numa_node                       = 8
+    maximum_count_per_numa_node                       = 10
     maximum_count_per_numa_socket                     = 1
     relative_weight                                   = 100
     reserve                                           = 0

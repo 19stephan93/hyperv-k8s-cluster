@@ -24,7 +24,7 @@ locals {
   hashicorp_servers = [
     {
       name = "hashicorp-server-001"
-      vhdx_path = "E:\\projects\\technovateit-solutions\\hyperv-k8s-cluster\\hdds\\ubuntu-packer-hashicorp-server-1.vhdx"
+      vhdx_path = "C:\\projects\\personal\\fintech\\apex_fintech_platform\\hyperv-k8s-cluster\\hdds\\ubuntu-packer-hashicorp-server-1.vhdx"
       mac_address = "00:15:5D:01:80:50",
       memory_mb = 6144,
       cpu_count = 2,
@@ -36,7 +36,7 @@ locals {
   hashicorp_clients = [
     {
       name = "hashicorp-client-001"
-      vhdx_path = "E:\\projects\\technovateit-solutions\\hyperv-k8s-cluster\\hdds\\ubuntu-packer-hashicorp-client-1.vhdx"
+      vhdx_path = "C:\\projects\\personal\\fintech\\apex_fintech_platform\\hyperv-k8s-cluster\\hdds\\ubuntu-packer-hashicorp-client-1.vhdx"
       mac_address = "00:15:5D:01:80:61",
       memory_mb = 12288,
       cpu_count = 6,

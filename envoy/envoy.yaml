@@ -60,6 +60,8 @@ static_resources:
     - filter_chain_match:
         server_names:
         - "whoami.ope.apps.technovateit-solutions.com"
+        - "fintech-platform.ope.apps.technovateit-solutions.com"
+        - "auth.ope.apps.technovateit-solutions.com"
         - "whoami-nomad.ope.apps.technovateit-solutions.com"
       filters:
       - name: envoy.filters.network.http_connection_manager
@@ -67,12 +69,37 @@ static_resources:
           "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
           stat_prefix: ingress_https
           codec_type: AUTO
+          scheme_header_transformation:
+            scheme_to_overwrite: https
           route_config:
             name: https_route
+            request_headers_to_add:
+            - header:
+                key: X-Forwarded-Proto
+                value: https
+              append_action: OVERWRITE_IF_EXISTS_OR_ADD
             virtual_hosts:
             - name: whoami_ope_apps_technovateit-solutions_com
               domains:
               - "whoami.ope.apps.technovateit-solutions.com"
+              routes:
+              - match:
+                  prefix: "/"
+                route:
+                  cluster: k8s_cluster
+                  timeout: 30s
+            - name: fintech-platform_ope_apps_technovateit-solutions_com
+              domains:
+              - "fintech-platform.ope.apps.technovateit-solutions.com"
+              routes:
+              - match:
+                  prefix: "/"
+                route:
+                  cluster: k8s_cluster
+                  timeout: 30s
+            - name: auth_ope_apps_technovateit-solutions_com
+              domains:
+              - "auth.ope.apps.technovateit-solutions.com"
               routes:
               - match:
                   prefix: "/"
