@@ -66,10 +66,42 @@ This project automates the setup of a local Kubernetes cluster and HashiCorp sta
 ---
 ## Troubleshooting
 
-### Kubernetes Envoy Gateway Not Updating Routes
-```kubectl rollout restart deployment envoy-envoy-gateway-system-eg-5391c79d -n envoy-gateway-system```
+### Pods stuck in Pending with no Events (kube-scheduler RBAC)
+If pods show `Pending` with no events and scheduler logs show "forbidden" errors:
+```bash
+kubectl logs -n kube-system -l component=kube-scheduler --tail=10
+```
+Fix with:
+```bash
+./devops/k8s/fix-scheduler-rbac.sh
+```
+This is also automatically checked by `deploy_resources_playbook.yml` on future provisioning.
 
-### Nomad 
+### Pods stuck in Pending (control-plane taint)
+If only one node exists (control plane) and pods can't schedule:
+```bash
+# Remove the taint to allow scheduling on control plane
+kubectl taint nodes <cp-node> node-role.kubernetes.io/control-plane:NoSchedule-
+```
+
+### Kubernetes Envoy Gateway Not Updating Routes
+```bash
+kubectl rollout restart deployment envoy-envoy-gateway-system-eg-5391c79d -n envoy-gateway-system
+```
+
+### kubectl from WSL
+Copy kubeconfig from control plane and install Linux kubectl:
+```bash
+mkdir -p ~/.kube
+scp ubuntu@<cp-ip>:~/.kube/config ~/.kube/config
+sed -i "s|https://.*:6443|https://<cp-ip>:6443|" ~/.kube/config
+
+# Install kubectl (not kubectl.exe — Windows binary can't read WSL paths)
+curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+chmod +x kubectl && sudo mkdir -p /usr/local/bin && sudo mv kubectl /usr/local/bin/
+```
+
+### Nomad
 
 ---
 
@@ -252,6 +284,7 @@ ansible-playbook -i hosts k8s/worker_setup_playbook.yml
    - **Automatically calls `deploy_resources_playbook.yml`** (you don't run this manually)
 
 3. **deploy_resources_playbook.yml** - Automatically triggered by master_setup_playbook (applies to `k8s_masters`):
+   - **Verifies kube-scheduler RBAC** (fixes if broken — can happen with kubeadm)
    - Copies all manifests from `to_deploy/k8s/` to the master node
    - Installs **MetalLB** with IP pool 192.168.1.200-250
    - Installs **Envoy Gateway** as ingress controller
@@ -296,7 +329,36 @@ kubectl get pods -n whoami
 kubectl get httproute -n whoami
 ```
 
-### 12. Access Kubernetes Dashboard
+### 12. Deploy Apex Fintech Stack
+
+After the cluster is running with worker nodes joined, deploy the application stack.
+
+**Build and distribute Docker images** (from WSL, in the repo root):
+```bash
+# Build images
+docker build -f trading-pattern-matching-engine/pattern-query-api/Dockerfile -t pattern-query-api:latest .
+docker build -f fintech-kotlin-gateway/Dockerfile -t kotlin-gateway:latest .
+docker build -f trading-web-ui/Dockerfile -t web-ui:latest ./trading-web-ui/
+
+# Save and transfer to worker node
+docker save pattern-query-api:latest -o pattern-query-api.tar
+docker save kotlin-gateway:latest -o kotlin-gateway.tar
+docker save web-ui:latest -o web-ui.tar
+scp *.tar ubuntu@<worker-ip>:~/
+
+# Load into containerd (not Docker — K8s uses containerd)
+ssh ubuntu@<worker-ip> "sudo ctr -n k8s.io images import ~/pattern-query-api.tar && sudo ctr -n k8s.io images import ~/kotlin-gateway.tar && sudo ctr -n k8s.io images import ~/web-ui.tar"
+```
+
+**Generate secrets and deploy:**
+```bash
+./devops/k8s/generate-secrets.sh --overlay prod
+./devops/k8s/start-k8s-local.sh --overlay prod
+```
+
+See `devops/k8s/LOCAL_K8S_DEPLOYMENT.md` for full deployment guide.
+
+### 13. Access Kubernetes Dashboard
 
 The Dashboard admin token is automatically generated and saved to `/home/ubuntu/dashboard-token.txt` on the master node.
 

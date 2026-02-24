@@ -9,6 +9,36 @@
     retries: 10
     delay: 10
 
+  - name: Verify kube-scheduler RBAC (fix if broken)
+    shell: |
+      # Check if scheduler can list pods (basic RBAC test)
+      if kubectl auth can-i list pods --as=system:kube-scheduler 2>/dev/null | grep -q "yes"; then
+        echo "OK"
+      else
+        echo "Fixing scheduler RBAC..."
+        kubectl create clusterrolebinding system:kube-scheduler \
+          --clusterrole=system:kube-scheduler \
+          --user=system:kube-scheduler \
+          --dry-run=client -o yaml | kubectl apply -f -
+        kubectl create clusterrolebinding system:volume-scheduler \
+          --clusterrole=system:volume-scheduler \
+          --user=system:kube-scheduler \
+          --dry-run=client -o yaml | kubectl apply -f -
+        # Restart scheduler to pick up new permissions
+        kubectl delete pod -n kube-system -l component=kube-scheduler
+        echo "FIXED"
+      fi
+    register: scheduler_rbac
+    changed_when: "'FIXED' in scheduler_rbac.stdout"
+
+  - name: Wait for kube-scheduler to restart
+    shell: kubectl get pods -n kube-system -l component=kube-scheduler --no-headers | grep Running | wc -l
+    register: scheduler_running
+    until: scheduler_running.stdout | int > 0
+    retries: 10
+    delay: 5
+    when: "'FIXED' in scheduler_rbac.stdout"
+
   - name: Create temporary directory for K8s manifests
     file:
       path: /tmp/k8s-manifests
