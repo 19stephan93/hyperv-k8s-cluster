@@ -96,7 +96,7 @@ static_resources:
                   prefix: "/"
                 route:
                   cluster: k8s_cluster
-                  timeout: 30s
+                  timeout: 120s
             - name: auth_ope_apps_technovateit-solutions_com
               domains:
               - "auth.ope.apps.technovateit-solutions.com"
